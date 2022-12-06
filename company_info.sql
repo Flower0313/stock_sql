@@ -356,4 +356,206 @@ from (
 ) b on a.ds = b.ds
 ;
 
+drop table dwd_stock_continuation_up;
 
+create table if not exists dwd_stock_continuation_up
+(
+    `code`    STRING COMMENT '股票代码',
+    `times`   bigint COMMENT '连涨次数',
+    `sumrate` decimal(8, 2) COMMENT '累积幅度',
+    `tag`     int COMMENT '1连涨，2连跌'
+)
+    PARTITIONED BY (`dt` string)
+    ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t'
+    STORED AS ORC
+    LOCATION '/hive/warehouse/df_db/dwd/dwd_stock_continuation_up'
+    TBLPROPERTIES ('orc.compress' = 'snappy');
+;
+
+-- 连续上涨or下跌的股票(>=3次)
+insert overwrite table dwd_stock_continuation_up partition (dt = '9999-12-31')
+select code, count(1) + 1 as times, sum(up_down_rate) as sumrate, 1 as tag
+from (
+         select res.*, (rk - row_number() over (partition by code order by rk)) as g
+         from (
+                  select today.ds, today.code, today.up_down_rate, today.current_price, today.turnover_rate, today.rk
+                  from (
+                           select a.ds, a.code, a.current_price, a.up_down_rate, a.turnover_rate, b.rk
+                           from (select *
+                                 from ods_a_stock_detail_day
+                                 where dt >= date_add(current_date(), -10)
+                                   and board in (2, 6)) a
+                                    left join
+                                (select ds, row_number() over (order by ds) as rk
+                                 from ods_calendar
+                                 where ds >= date_add(current_date(), -10)
+                                   and astatus = 1) b
+                                on a.ds = b.ds
+                       ) today
+                           inner join (
+                      select a.ds, a.code, a.current_price, a.up_down_rate, a.turnover_rate, b.rk
+                      from (select *
+                            from ods_a_stock_detail_day
+                            where dt >= date_add(current_date(), -10)
+                              and board in (2, 6)) a
+                               left join
+                           (select ds, row_number() over (order by ds) as rk
+                            from ods_calendar
+                            where ds >= date_add(current_date(), -10)
+                              and astatus = 1) b
+                           on a.ds = b.ds
+                  ) yester on today.code = yester.code
+                      and today.rk = yester.rk + 1
+                      and today.current_price > yester.current_price) res
+     ) a
+group by code, g
+having count(1) >= 2
+   and max(ds) = current_date()
+union all
+select code, count(1) + 1 as times, sum(up_down_rate) as sumrate, 2 as tag
+from (
+         select res.*, (rk - row_number() over (partition by code order by rk)) as g
+         from (
+                  select today.ds, today.code, today.up_down_rate, today.current_price, today.turnover_rate, today.rk
+                  from (
+                           select a.ds, a.code, a.current_price, a.up_down_rate, a.turnover_rate, b.rk
+                           from (select *
+                                 from ods_a_stock_detail_day
+                                 where dt >= date_add(current_date(), -10)
+                                   and board in (2, 6)) a
+                                    left join
+                                (select ds, row_number() over (order by ds) as rk
+                                 from ods_calendar
+                                 where ds >= date_add(current_date(), -10)
+                                   and astatus = 1) b
+                                on a.ds = b.ds
+                       ) today
+                           inner join (
+                      select a.ds, a.code, a.current_price, a.up_down_rate, a.turnover_rate, b.rk
+                      from (select *
+                            from ods_a_stock_detail_day
+                            where dt >= date_add(current_date(), -10)
+                              and board in (2, 6)) a
+                               left join
+                           (select ds, row_number() over (order by ds) as rk
+                            from ods_calendar
+                            where ds >= date_add(current_date(), -10)
+                              and astatus = 1) b
+                           on a.ds = b.ds
+                  ) yester on today.code = yester.code
+                      and today.rk = yester.rk + 1
+                      and today.current_price < yester.current_price) res
+     ) a
+group by code, g
+having count(1) >= 2
+   and max(ds) = current_date()
+;
+
+
+
+create table if not exists dwd_finance_continuation_up
+(
+    `code`     STRING COMMENT '股票代码',
+    `times`    bigint COMMENT '连涨次数',
+    `sumprice` decimal(32, 4) COMMENT '累积价格',
+    `tag`      int COMMENT '1连涨，2连跌'
+)
+    PARTITIONED BY (`dt` string)
+    ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t'
+    STORED AS ORC
+    LOCATION '/hive/warehouse/df_db/dwd/dwd_finance_continuation_up'
+    TBLPROPERTIES ('orc.compress' = 'snappy');
+;
+
+insert overwrite table dwd_finance_continuation_up partition (dt = '9999-12-31')
+select code, count(1) + 1 as times, max(financing_balance) - min(financing_balance) as sumbuy, 1 as tag
+from (
+         select res.*, (rk - row_number() over (partition by code order by rk)) as g
+         from (
+                  select today.code,
+                         today.financing_balance,
+                         today.bond_balance,
+                         today.notice_date,
+                         today.rk
+                  from (
+                           select code,
+                                  financing_balance,
+                                  bond_balance,
+                                  notice_date,
+                                  row_number() over (partition by code order by notice_date) as rk
+                           from ods_a_stock_finance_info
+                           where dt >= date_add(current_date(), -11)
+                             and code in
+                                 (select distinct code
+                                  from ods_a_stock_detail_day
+                                  where dt = date_add(current_date(), -1)
+                                    and board in (2, 6))
+                       ) today
+                           inner join (
+                      select code,
+                             financing_balance,
+                             bond_balance,
+                             notice_date,
+                             row_number() over (partition by code order by notice_date) as rk
+                      from ods_a_stock_finance_info
+                      where dt >= date_add(current_date(), -11)
+                        and code in
+                            (select distinct code
+                             from ods_a_stock_detail_day
+                             where dt = date_add(current_date(), -1)
+                               and board in (2, 6))
+                  ) yester on today.code = yester.code
+                      and today.rk = yester.rk + 1
+                      and today.financing_balance > yester.financing_balance
+              ) res
+     ) a
+group by code, g
+having count(1) >= 2
+   and max(notice_date) = date_add(current_date(), -1)
+union all
+select code, count(1) + 1 as times, min(financing_balance) - max(financing_balance) as sumbuy, 2 as tag
+from (
+         select res.*, (rk - row_number() over (partition by code order by rk)) as g
+         from (
+                  select today.code,
+                         today.financing_balance,
+                         today.bond_balance,
+                         today.notice_date,
+                         today.rk
+                  from (
+                           select code,
+                                  financing_balance,
+                                  bond_balance,
+                                  notice_date,
+                                  row_number() over (partition by code order by notice_date) as rk
+                           from ods_a_stock_finance_info
+                           where dt >= date_add(current_date(), -11)
+                             and code in
+                                 (select distinct code
+                                  from ods_a_stock_detail_day
+                                  where dt = date_add(current_date(), -1)
+                                    and board in (2, 6))
+                       ) today
+                           inner join (
+                      select code,
+                             financing_balance,
+                             bond_balance,
+                             notice_date,
+                             row_number() over (partition by code order by notice_date) as rk
+                      from ods_a_stock_finance_info
+                      where dt >= date_add(current_date(), -11)
+                        and code in
+                            (select distinct code
+                             from ods_a_stock_detail_day
+                             where dt = date_add(current_date(), -1)
+                               and board in (2, 6))
+                  ) yester on today.code = yester.code
+                      and today.rk = yester.rk + 1
+                      and today.financing_balance < yester.financing_balance
+              ) res
+     ) a
+group by code, g
+having count(1) >= 2
+   and max(notice_date) = date_add(current_date(), -1);
+
+select count(1) from dwd_finance_continuation_up;
