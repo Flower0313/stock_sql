@@ -40,7 +40,9 @@ FROM (
          FROM ods_a_stock_detail_day
      ) allS
 ;
-select * from ods_a_stock_detail_day where dt='2022-11-07';
+select *
+from ods_a_stock_detail_day
+where dt = '2022-11-07';
 drop table dwd_training_data;
 create table if not exists dwd_training_data
 (
@@ -133,14 +135,22 @@ from (
          select code, up_down_rate, concat(year, '-', month_day) as ds
          from ods_a_stock_history
          where dt = '2022-08-04'
+           and code in (select code from ods_a_stock_detail_day where dt = '2022-12-12' and board in (2, 6))
+           and up_down_rate <> 0
+           and year >= 2017
          union all
          select code, up_down_rate, ds
          from ods_a_stock_detail_day
          where up_down_rate <> 0
+           and current_price > 0
+           and board in (2, 6)
      ) a
 ;
 
 
+
+select *
+from dwd_temp;
 ------
 insert into table dwd_training_data partition (dt = '2022-11-01')
 select code, tags, kline
@@ -151,19 +161,19 @@ from (
                           COLLECT_LIST(CAST(if(up_down_rate > 0, 1, if(up_down_rate = 0, 0, -1)) AS STRING))) AS kline
               , CONCAT_WS('?', COLLECT_LIST(CAST(no AS STRING)))                                              AS nos
          from (
-                  SELECT c.code
+                  SELECT b.code
                        , b.tags
-                       , row_number() over (partition by c.code,tags order by c.rk) as no
+                       , row_number() over (partition by b.code,tags order by c.rk) as no
                        , c.up_down_rate
                   FROM (
                            SELECT *
                                 , ROW_NUMBER() OVER (PARTITION BY code ORDER BY start_rk ) AS tags
                            FROM (
                                     SELECT code
-                                         , rk - 12 AS start_rk
-                                         , rk      AS end_rk
+                                         , rk - 6 AS start_rk
+                                         , rk     AS end_rk
                                     FROM dwd_temp
-                                    where ds >= '2016-06-25'
+                                    where code = '603209'
                                 ) a
                            WHERE start_rk > 0
                        ) b
@@ -172,7 +182,7 @@ from (
                            , up_down_rate
                            , rk
                       FROM dwd_temp
-                      where ds >= '2016-06-25'
+                      where code = '603209'
                   ) c
                                       ON b.code = c.code
                                           AND c.rk >= start_rk
@@ -183,6 +193,9 @@ from (
      ) result
 ;
 
+select code, max(rk)
+from dwd_temp
+group by code;
 
 ---------------------------
 
@@ -208,27 +221,88 @@ order by ratio desc
 ;
 
 
-------------------------
-select distinct code
-from dwd_training_data
-where dt = '2022-11-01'
-  and SUBSTRING_INDEX(kline, ',', 7) in ('1,-1,-1,-1,-1,1,1', '1,1,-1,1,-1,1,-1');
+------------------------连续5天
+SELECT b.code, b.start_rk as g, c.up_down_rate, c.rk
+FROM (
+         SELECT *
+         FROM (
+                  SELECT code
+                       , rk - 4 AS start_rk
+                       , rk     AS end_rk
+                  FROM dwd_temp
+                  where code = '603209'
+              ) a
+         WHERE start_rk > 0
+     ) b
+         inner JOIN (
+    SELECT code
+         , up_down_rate
+         , rk
+    FROM dwd_temp
+    where code = '603209'
+) c
+                    ON b.code = c.code
+                        AND c.rk >= start_rk
+                        AND c.rk <= end_rk
+;
+--------------------- 1周交易日
+drop table dwd_train;
+create table if not exists dwd_train
+(
+    `ups`           STRING COMMENT '涨幅列表',
+    `monday_result` decimal(5, 2) COMMENT '周一结果',
+    `week_result`   decimal(5, 2) COMMENT '一周结果'
+)
+    COMMENT '训练中间表'
+    PARTITIONED BY (`dt` string)
+    ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t'
+    STORED AS ORC
+    LOCATION '/hive/warehouse/df_db/dwd/dwd_train'
+    TBLPROPERTIES ('orc.compress' = 'snappy');
 
 
 
-desc ods_a_stock_deal;
+insert overwrite table dwd_train partition (dt = '9999-12-31')
+select *
+from (
+         select CONCAT_WS(',', COLLECT_LIST(CAST(round(up_down_rate, 1) AS STRING))) as ups
+              , lead(sum(if(weekday = 1, round(up_down_rate), 0)))
+                     over (partition by year,code order by weekofyear)               as monday_result
+              , lead(round(sum(up_down_rate)))
+                     over (partition by year,code order by weekofyear)               as week_result
+         from (
+                  select substr(ds, 1, 4) as `year`,
+                         weekday,
+                         weekofyear,
+                         ds
+                  from ods_calendar
+                  where ds >= '2018-01-01'
+                    and astatus = 1
+              ) cal
+                  left join (
+             select code, up_down_rate, concat(year, '-', month_day) as ds
+             from ods_a_stock_history
+             where dt = '2022-08-04'
+               and code in (select code from ods_a_stock_detail_day where dt = '2022-12-12' and board in (2, 6))
+               and up_down_rate <> 0
+             union all
+             select code, up_down_rate, ds
+             from ods_a_stock_detail_day
+             where up_down_rate <> 0
+               and current_price > 0
+               and code in (select code from ods_a_stock_detail_day where dt = '2022-12-12' and board in (2, 6))
+         ) b on cal.ds = b.ds
+         where b.code is not null
+         group by year, weekofyear, code
+         having count(1) = 5
+     ) result
+where monday_result is not null
+;
 
-select distinct code
-from ods_a_stock_deal
-where dt = '2022-11-07'
-  and draw >= 5000
-  and buyorsale = 2
-  and current_time >= '13:00:00';
 
-select * from ods_a_stock_detail_day where dt='2022-11-07'
+select *
+from dwd_train
+limit 100;
 
-desc ods_a_stock_detail_day;
 
-select count(1) from ods_stock_inrecursive_index where dt='2022-11-08';
-
-select count(1) from ods_a_stock_detail_day where dt='2022-11-10';
+-- python /opt/module/datax/bin/datax.py -p"-Dexportdir=/hive/warehouse/df_db/dwd/dwd_train/dt=9999-12-31" /opt/module/datax/job/export/hdfs2csv.json

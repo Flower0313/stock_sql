@@ -558,4 +558,103 @@ group by code, g
 having count(1) >= 2
    and max(notice_date) = date_add(current_date(), -1);
 
-select count(1) from dwd_finance_continuation_up;
+select count(1)
+from dwd_finance_continuation_up;
+
+select code, main_inflow, slarge_inflow, large_inflow, mid_inflow, small_inflow
+from ods_a_stock_detail_day
+where dt = '2022-12-06'
+  and board in (2, 6);
+
+
+select ds,
+       code,
+       main_inflow * 100 /
+       (abs(main_inflow) + abs(slarge_inflow) + abs(large_inflow) + abs(mid_inflow) + abs(small_inflow)) as main,
+       slarge_inflow * 100 /
+       (abs(main_inflow) + abs(slarge_inflow) + abs(large_inflow) + abs(mid_inflow) + abs(small_inflow)) as slarge,
+       large_inflow * 100 /
+       (abs(main_inflow) + abs(slarge_inflow) + abs(large_inflow) + abs(mid_inflow) + abs(small_inflow)) as large,
+       mid_inflow * 100 /
+       (abs(main_inflow) + abs(slarge_inflow) + abs(large_inflow) + abs(mid_inflow) + abs(small_inflow)) as mid,
+       small_inflow * 100 /
+       (abs(main_inflow) + abs(slarge_inflow) + abs(large_inflow) + abs(mid_inflow) + abs(small_inflow)) as small,
+       up_down_rate
+from ods_a_stock_detail_day
+where dt >= '2022-11-23'
+  and code = '601222'
+order by ds;
+
+
+select a.code, a.notice_date, a.title, oasdd.up_down_rate
+from ods_a_stock_news a
+         inner join ods_a_stock_detail_day oasdd on a.code = oasdd.code
+    and a.dt = '2022-12-08' and oasdd.dt = '2022-12-09'
+    and oasdd.board in (2, 6)
+    and oasdd.current_price > 0
+;
+
+
+
+select case when draw < 10 then 10 when draw < 99 then 99 when draw < 999 then 999 else 9999 end, count(1)
+from ods_a_stock_deal
+where dt = '2022-12-07'
+  and code = '601222'
+group by case when draw < 10 then 10 when draw < 99 then 99 when draw < 999 then 999 else 9999 end
+;
+
+select code, main_inflow, slarge_inflow, large_inflow, mid_inflow, small_inflow
+from ods_a_stock_detail_day
+where dt = '2022-12-07'
+  and code = '601222';
+
+
+-- 只取主力、超大单
+-- 只取中单、小单
+
+
+select code, sum(big) as big, sum(small) as small
+from (
+         select code,
+                (main_inflow + slarge_inflow) as big,
+                large_inflow,
+                (mid_inflow + small_inflow)   as small,
+                up_down_rate
+         from ods_a_stock_detail_day
+         where dt = '2022-12-12'
+         order by big - small desc
+     ) a
+group by code
+order by big desc;
+;
+
+
+select b.title, b.notice_date, a.code, a.up_down_rate, a.turnover_rate
+from ods_a_stock_detail_day a
+         inner join ods_a_stock_news b
+                    on a.code = b.code
+                        and a.dt = '2022-12-12'
+                        and b.dt = '2022-12-11'
+                        and a.board in (2, 6)
+                        and a.current_price > 0
+order by a.up_down_rate desc;
+
+
+select code,
+       sum(if(buyorsale = 2, draw * deal * 100, 0))   as buy,
+       sum(if(buyorsale = 1, (draw * deal * 100), 0)) as sale,
+       sum(if(buyorsale = 4, (draw * deal * 100), 0)) as gua
+from ods_a_stock_deal
+where dt = '2022-12-09'
+  and code = '001219'
+group by code
+;
+
+select code, main_inflow, slarge_inflow, large_inflow, mid_inflow, small_inflow
+from ods_a_stock_detail_day
+where dt = '2022-12-12';
+
+
+select *
+from ods_a_stock_news
+where dt = '2022-12-11';
